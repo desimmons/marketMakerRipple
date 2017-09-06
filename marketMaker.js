@@ -46,56 +46,69 @@ function orderLogic(address,orderbook){
 					"bid": bid0*(1-orderOffset),
 				  	"ask": ask0*(1+orderOffset)
 		 		}
-	console.log(ask0,bid0,orderbook.bids[0],orderbook.asks[0]);
+	// These are prices that orders will be placed
+	console.log(myOrders.bid,myOrders.ask);
 
 	//get my current orders held on the ripple network
 	api.getOrders(address).then(orders =>
 	{	
-		//order object that will be submitted to network
-		var orderObj = {};
-	  	for(i=0;i<=orders.length-1;i++)
-	  	{
-	  		for(j=0;j<=prevOrders.length-1;j++){
-	  			condition = prevOrders[j].properties.sequence == orders[i].properties.sequence;		
-	  			if(condition)
-  				{	//cancel the order
+		return new Promise((resolve1,reject1) => {
+			//order object that will be submitted to network
+			var orderObj = {};
+			//nested forloop required so that we can find 
+			//and compare our previous orders with our current orders 
+			//to see which went through.
+			//This is done on line (I)
+		  	for(i=0;i<=orders.length-1;i++)
+		  	{
+		  		for(j=0;j<=prevOrders.length-1;j++){
+		  			condition = prevOrders[j].properties.sequence == orders[i].properties.sequence;	//(I)
+		  			if(condition)
+	  				{	
 
-  					// orderCanceller(orders[i]);
+	  					//cancel the order provided it isn't a resell
+	  					// orderCanceller(orders[i]);
 
-  					// Calc size of orders that went through
-					soldAmount = orders[i].specification.quantity.value - prevOrders[j].specification.quantity.value;
-					// build order object from returned current orders
-		  			// (orders=[{specification,properties}]) that will be 
-					// submitted to network,  but remove properties attribute
-					orderObj = orders[i].specification;
-					// If anything sold, update value of previous order still on the books
-					orderObj.quantity.value = orderObj.quantity.value-soldAmount;
-					// Calculate where to place the orders
-					if(orderObj.direction == "buy"){	
-						orderObj.totalPrice.value = orderObj.quantity.value/myOrders.ask;//***********!!!!!!!!!!
-					} else{
-						orderObj.totalPrice.value = orderObj.quantity.value*myOrders.bid;
-					}
-
-					// orderPlacer(orderObj,myOrders);
-					// if any of the order went through, prepare object to resell back again
-					if(soldAmount>0){
-					// Build object so that if order that went through was a "sell", 
-					// prepare a "buy" and vice versa 
-						if(orders.direction=="buy")
-						{	orderObj.direction = "sell"}
-						else
-						{	orderObj.direction = "buy"}
-						if(orderObj.direction == "buy"){	
-							orderObj.totalPrice.value = orderObj.quantity.value/(ask0*(1+buyBackOffset));//***********!!!!!!!!!!
-						} else{
-							orderObj.totalPrice.value = orderObj.quantity.value*(ask0*(1-buyBackOffset));
+	  					// Calc size of orders that went through
+						soldAmount = orders[i].specification.quantity.value - prevOrders[j].specification.quantity.value;
+						// build order object from returned current orders
+			  			// (orders=[{specification,properties}]) that will be 
+						// submitted to network,  but remove properties attribute
+						orderObj = orders[i].specification;
+						// If anything sold, update value of previous order still on the books
+						orderObj.quantity.value = orderObj.quantity.value-soldAmount;
+						// Calculate where to place the orders
+						if(orderObj.quantity.value > 0){
+							if(orderObj.direction == "buy"){	
+								orderObj.totalPrice.value = orderObj.quantity.value/myOrders.ask;//***********!!!!!!!!!!
+							} else{
+								orderObj.totalPrice.value = orderObj.quantity.value*myOrders.bid;
+							}
+							// orderCreater(orderObj)
 						}
-					}
-  				}
-	  		}
-	  	}
-	  	prevOrders=orders;
+						
+						// orderPlacer(orderObj,myOrders); //resubmit offset order
+
+						// if any of the order went through, prepare object to resell back again
+						if(soldAmount>0){
+						// Build object so that if order that went through was a "sell", 
+						// prepare a "buy" and vice versa 
+							if(orders.direction=="buy")
+							{	orderObj.direction = "sell";
+								orderObj.totalPrice.value = orderObj.quantity.value*(ask0*(1-buyBackOffset));
+							}
+							else
+							{	orderObj.direction = "buy";
+								orderObj.totalPrice.value = orderObj.quantity.value/(ask0*(1+buyBackOffset));
+							}
+							// orderCreater(orderObj)
+						}
+	  				}
+		  		}
+		  	}
+		  	prevOrders=orders;
+		  	resolve1();
+		})
 	}).then(()=>{resolve()});
 		//orderPlacer(address,price)
 	});
@@ -150,7 +163,7 @@ api.connect().then(() => {
 		"counterparty": "rhub8VRN55s94qWKDv6jmDy1pUykJzF3wq"}
 		};
 		const wait = 1; 
-		a = ordersRequester(address, orderbook,wait);
+		a = ordersRequester(address, orderbook, wait);
 
 
 })
