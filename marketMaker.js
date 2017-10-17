@@ -6,8 +6,13 @@ const api = new RippleAPI({
 });
 
 var prevOrderVal = [];
+var reselTag = {};
 var prevOrders = [];
 var soldAmount = [];
+var spotPrice = {};
+var counter = 0
+var	orderOffset = 0.05;
+var buyBackOffset = 0.02;
 
 function ordersRequester(address,orderbook,wait){
 	
@@ -23,12 +28,11 @@ function orderLogic(address,orderbook){
 	return new Promise((resolve,reject) => {
 	//Get ask & bid (ask0 & bid0) closest to spot price
 	//then calculate where to place orders based on orderOffset
-	//percentage. Orders to be made are stored in myOrders.
+	//percentage. Orders to be made are stored in spotPrice.
 	//Also, two for loops required below because sometimes returned 
 	//orderbook is not ordered from best to worst offer, so have to
 	//search orderbookto find best offers
-	orderOffset = 0.05;
-	buyBackOffset = 0.02;
+
 	if(orderOffset<buyBackOffset){reject()}
 	var ask0 = 0;
 	var bid0 = 0;
@@ -42,94 +46,148 @@ function orderLogic(address,orderbook){
 		var temp2 = 1/parseFloat(orderbook.asks[i].properties.makerExchangeRate)
 		if(temp2 >= ask0){ask0 = temp2;askIndex = i}
 	}
-	myOrders = 	{
-					"bid": bid0*(1-orderOffset),
-				  	"ask": ask0*(1+orderOffset)
-		 		}
-	// These are prices that orders will be placed
-	console.log(myOrders.bid,myOrders.ask);
+	spotPrice["current"] = 	{
+								"bid": bid0,
+							  	"ask": ask0
+							}
 
-	//get my current orders held on the ripple network
-	api.getOrders(address).then(orders =>
-	{	
-		return new Promise((resolve1,reject1) => {
+		 		
+	// These are prices that orders will be placed
+	console.log("Bid price: "+spotPrice.current.bid+"\n"+"Ask price: "+1/spotPrice.current.ask+"\n");
+	
+	// stop the function on the first round so that it sets itself up
+	// with historical transactions
+	if(counter==0){counter+=1;
+		api.getOrders(address).then(orders =>
+		{
+			  	prevOrders=orders;
+		}).then(()=>{resolve()});
+	}
+	else{
+		console.log(counter)
+		counter+=1;
+
+		api.getOrders(address).then(orders =>
+		{	
 			//order object that will be submitted to network
 			var orderObj = {};
+	
 			//nested forloop required so that we can find 
 			//and compare our previous orders with our current orders 
 			//to see which went through.
 			//This is done on line (I)
-		  	for(i=0;i<=orders.length-1;i++)
+			loop1:
+		  	for(j=0;j<=prevOrders.length-1;j++)
 		  	{
-		  		for(j=0;j<=prevOrders.length-1;j++){
-		  			condition = prevOrders[j].properties.sequence == orders[i].properties.sequence;	//(I)
-		  			if(condition)
-	  				{	
+		  		loop2:
+		  		for(i=0;i<=orders.length-1;i++){
+		  			seqCondition = prevOrders[j].properties.sequence == orders[i].properties.sequence;	//(I)
+		  			if(seqCondition)
+	  				{	/////////////////////////////////////////
+	  					// Manage cancelling of previous orders
+	  					/////////////////////////////////////////
 
-	  					//cancel the order provided it isn't a resell
-	  					// orderCanceller(orders[i]);
+	  					if(reselTag[prevOrders[j].properties.sequence] == false){
+	  						console.log("\nOrder", prevOrders[j].properties.sequence, "cancelled")
+		  					//cancel the order provided it isn't a resell
+		  					// orderCanceller(orders[i]);				
+		  					delete reselTag[prevOrders[j].properties.sequence]
+	  					}
+	  					else{
+	  						console.log("\nOrder", prevOrders[j].properties.sequence, "not cancelled because it's resell")
+	  					}
 
+
+	  					/////////////////////////////////////////
+	  					// Prepare order
+	  					/////////////////////////////////////////
 	  					// Calc size of orders that went through
 						soldAmount = orders[i].specification.quantity.value - prevOrders[j].specification.quantity.value;
 						// build order object from returned current orders
 			  			// (orders=[{specification,properties}]) that will be 
-						// submitted to network,  but remove properties attribute
+						// submitted to network, but remove properties attribute
 						orderObj = orders[i].specification;
 						// If anything sold, update value of previous order still on the books
 						orderObj.quantity.value = orderObj.quantity.value-soldAmount;
 						// Calculate where to place the orders
-						if(orderObj.quantity.value > 0){
-							if(orderObj.direction == "buy"){	
-								orderObj.totalPrice.value = orderObj.quantity.value/myOrders.ask;//***********!!!!!!!!!!
-							} else{
-								orderObj.totalPrice.value = orderObj.quantity.value*myOrders.bid;
-							}
-							// orderCreater(orderObj)
+						if(orderObj.direction == "buy"){	
+							orderObj.totalPrice.value = orderObj.quantity.value/spotPrice.current.ask*(1+orderOffset);//***********!!!!!!!!!!
+						} else{
+							orderObj.totalPrice.value = orderObj.quantity.value*spotPrice.current.bid*(1-orderOffset);
 						}
-						
-						// orderPlacer(orderObj,myOrders); //resubmit offset order
+						instructions = {"maxFee" : null,
+										"maxLedgerVersion": null,
+										"sequence" : null}
+						// reselTag[instructions.sequence] = false;//tag the order as being not a resell
 
+
+	  					/////////////////////////////////////////
+	  					// Place order
+	  					/////////////////////////////////////////
+	  					// orderPlacer(orderObj,instructions,spotPrice); //submit offset order
 						// if any of the order went through, prepare object to resell back again
 						if(soldAmount>0){
 						// Build object so that if order that went through was a "sell", 
 						// prepare a "buy" and vice versa 
 							if(orders.direction=="buy")
 							{	orderObj.direction = "sell";
-								orderObj.totalPrice.value = orderObj.quantity.value*(ask0*(1-buyBackOffset));
+								orderObj.totalPrice.value = orderObj.quantity.value*(spotPrice.current.ask*(1-buyBackOffset));
 							}
 							else
 							{	orderObj.direction = "buy";
-								orderObj.totalPrice.value = orderObj.quantity.value/(ask0*(1+buyBackOffset));
+								orderObj.totalPrice.value = orderObj.quantity.value/(spotPrice.current.bid*(1+buyBackOffset));
 							}
-							// orderCreater(orderObj)
+							instructions = {"maxFee" : null,
+											"maxLedgerVersion": null,
+											"sequence" : null}
+							// orderPlacer(orderObj,spotPrice); //submit offset order
+							// reselTag[instructions.sequence] = true;//tag the order as being a resell
 						}
+						break loop2; // break inner loop here. Breaking ensures seqCondition = true for lower block of code
 	  				}
 		  		}
+
+				/////////////////////////////////////////
+				// Manage orders that went through entirely
+				/////////////////////////////////////////
+				// if any of the order went through completely, they will have been missed by the loop
+				// above so they need to be resold too. The following if statement checks if the above loop (loop2) missed them.
+				if(!seqCondition){//seqCondition will be false iff it was missed by above loops, iff it was completed entirely
+
+				// Build object so that if order that went through was a "sell", 
+				// prepare a "buy" and vice versa 
+					if(prevOrders.direction=="buy")
+					{	prevOrders.direction = "sell";
+						prevOrders.totalPrice.value = prevOrders.quantity.value*(spotPrice.prev.ask*(1-buyBackOffset));
+					}
+					else
+					{	prevOrders.direction = "buy";
+						prevOrders.totalPrice.value = prevOrders.quantity.value/(spotPrice.prev.bid*(1-buyBackOffset));
+					}
+					instructions = {"maxFee" : null,
+									"maxLedgerVersion": null,
+									"sequence" : null}
+					// orderCreater(address,orderObj)
+					// reselTag = {prevOrders[j].properties.sequence: true;}//tag the order as being a resell
+				}
+
 		  	}
+			spotPrice["prev"] = spotPrice["current"];
 		  	prevOrders=orders;
-		  	resolve1();
-		})
-	}).then(()=>{resolve()});
+
+		}).then(()=>{resolve()});
+
+	}
+
+	//get my current orders held on the ripple network
+
 		//orderPlacer(address,price)
-	});
+	}
+	);
 }
 
-function orderPlacer(address,price,direction){
-	const order = {
-	  "direction": direction,
-	  "quantity": {
-	    "currency": "USD",
-	    "counterparty": "rMH4UxPrbuMa1spCBR98hLLyNJp4d8p4tM",
-	    "value": "10.1"
-	  },
-	  "totalPrice": {
-	    "currency": "XRP",
-	    "value": "2"
-	  },
-	  "passive": true,
-	  "fillOrKill": true
-	};
-	return api.prepareOrder(address, order)
+function orderCreater(address,orderObj){
+	return api.prepareOrder(address, orderObj)
 	  .then(prepared => {/* ... */});
 }
 
@@ -160,7 +218,7 @@ api.connect().then(() => {
 		  },
 		  "counter": {
 		    "currency": "USD",
-		"counterparty": "rhub8VRN55s94qWKDv6jmDy1pUykJzF3wq"}
+		"counterparty": "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B"}
 		};
 		const wait = 1; 
 		a = ordersRequester(address, orderbook, wait);
