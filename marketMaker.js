@@ -14,6 +14,8 @@ var counter = 0
 var	orderOffset = 0.05;
 var buyBackOffset = 0.02;
 
+function ordersRequesterV2(a)
+
 function ordersRequester(address,orderbook,wait){
 	
 	return api.getOrderbook(address, orderbook)
